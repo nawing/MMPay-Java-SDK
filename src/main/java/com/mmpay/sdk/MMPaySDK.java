@@ -1,7 +1,8 @@
 package com.mmpay.sdk;
 
-import com.mmpay.sdk.model.Item;            // Importing Item
-import com.mmpay.sdk.model.PaymentRequest;  // Importing PaymentRequest
+import com.mmpay.sdk.model.Item;
+import com.mmpay.sdk.model.PaymentRequest;
+import com.mmpay.sdk.model.PayGetRequest;
 import com.mmpay.sdk.model.SDKOptions;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -17,12 +18,9 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
-
 // --- Main SDK Class ---
-
 public class MMPaySDK {
 
     private final String appId;
@@ -112,9 +110,6 @@ public class MMPaySDK {
     public Map<String, Object> sandboxPay(PaymentRequest params) throws Exception {
         String nonce = getNonce();
 
-        // Construct Payload manually to ensure order matches logic if needed, 
-        // or just map Request object to an internal DTO that includes appId/nonce.
-        // Using ObjectNode for flexibility in adding fields like 'nonce' and 'appId'.
         ObjectNode xPayload = mapper.valueToTree(params);
         xPayload.put("appId", this.appId);
         xPayload.put("nonce", nonce);
@@ -127,6 +122,22 @@ public class MMPaySDK {
         headers.put("X-Mmpay-Btoken", this.btoken);
 
         return sendRequest("/payments/sandbox-create", xPayload, headers);
+    }
+
+    public Map<String, Object> sandboxGet(PayGetRequest params) throws Exception {
+        String nonce = getNonce();
+
+        ObjectNode xPayload = mapper.valueToTree(params);
+        xPayload.put("nonce", nonce);
+
+        // 1. Handshake
+        sandboxHandShake(params.orderId, nonce);
+
+        // 2. Get
+        Map<String, String> headers = new HashMap<>();
+        headers.put("X-Mmpay-Btoken", this.btoken);
+
+        return sendRequest("/payments/sandbox-get", xPayload, headers);
     }
 
     // --- Production Methods ---
@@ -159,6 +170,22 @@ public class MMPaySDK {
         headers.put("X-Mmpay-Btoken", this.btoken);
 
         return sendRequest("/payments/create", xPayload, headers);
+    }
+
+    public Map<String, Object> get(PayGetRequest params) throws Exception {
+        String nonce = getNonce();
+
+        ObjectNode xPayload = mapper.valueToTree(params);
+        xPayload.put("nonce", nonce);
+
+        // 1. Handshake
+        handShake(params.orderId, nonce);
+
+        // 2. Get
+        Map<String, String> headers = new HashMap<>();
+        headers.put("X-Mmpay-Btoken", this.btoken);
+
+        return sendRequest("/payments/get", xPayload, headers);
     }
 
     // --- Verification ---

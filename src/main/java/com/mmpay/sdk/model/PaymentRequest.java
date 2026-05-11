@@ -7,9 +7,7 @@ public class PaymentRequest {
     public double amount;
     public String currency;
     public String callbackUrl;
+    public String customMessage; // Added to match Node/PHP implementations
     
-    // We use the Item class defined in the same package
     public List<Item> items; 
-
-    // Optional: Add a constructor or builder pattern here if you like
 }
