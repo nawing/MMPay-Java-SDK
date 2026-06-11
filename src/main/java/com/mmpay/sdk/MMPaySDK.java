@@ -1,8 +1,11 @@
+// File: MMPay-Java-SDK/src/main/java/com/mmpay/sdk/MMPaySDK.java
+
 package com.mmpay.sdk;
 
 import com.mmpay.sdk.model.Item;
 import com.mmpay.sdk.model.PaymentRequest;
 import com.mmpay.sdk.model.PayGetRequest;
+import com.mmpay.sdk.model.PayCancelRequest;
 import com.mmpay.sdk.model.SDKOptions;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -17,8 +20,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 // --- Main SDK Class ---
 public class MMPaySDK {
@@ -27,15 +33,20 @@ public class MMPaySDK {
     private final String publishableKey;
     private final String secretKey;
     private final String apiBaseUrl;
+    private final boolean isSandbox;
     private final HttpClient httpClient;
     private final ObjectMapper mapper;
     private String btoken;
+
+    // Event listeners
+    private final Map<String, List<Consumer<Object>>> listeners = new HashMap<>();
 
     public MMPaySDK(SDKOptions options) {
         this.appId = options.appId;
         this.publishableKey = options.publishableKey;
         this.secretKey = options.secretKey;
         this.apiBaseUrl = options.apiBaseUrl.replaceAll("/$", ""); // Remove trailing slash
+        this.isSandbox = this.publishableKey.contains("_test_") || this.secretKey.contains("_test_");
         
         this.httpClient = HttpClient.newHttpClient();
         
@@ -89,65 +100,52 @@ public class MMPaySDK {
             throw new RuntimeException("API Error: " + response.statusCode() + " " + response.body());
         }
 
-        return mapper.readValue(response.body(), Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> responseMap = mapper.readValue(response.body(), Map.class);
+        return responseMap;
     }
 
-    // --- Sandbox Methods ---
+    // --- Event Emitter ---
 
-    public Map<String, Object> sandboxHandShake(String orderId, String nonce) throws Exception {
-        Map<String, String> payload = new HashMap<>();
-        payload.put("orderId", orderId);
-        payload.put("nonce", nonce);
+    public MMPaySDK on(String event, Consumer<Object> callback) {
+        listeners.computeIfAbsent(event, k -> new ArrayList<>()).add(callback);
+        return this;
+    }
 
-        Map<String, Object> response = sendRequest("/payments/sandbox-handshake", payload, null);
-        
-        if (response.containsKey("token")) {
-            this.btoken = (String) response.get("token");
+    private void emit(String event, Object data) {
+        List<Consumer<Object>> eventListeners = listeners.get(event);
+        if (eventListeners != null) {
+            for (Consumer<Object> listener : eventListeners) {
+                listener.accept(data);
+            }
         }
-        return response;
     }
 
-    public Map<String, Object> sandboxPay(PaymentRequest params) throws Exception {
-        String nonce = getNonce();
+    @SuppressWarnings("unchecked")
+    public MMPaySDK onTxCreate(Consumer<Map<String, Object>> cb) { return on("tx:create", obj -> cb.accept((Map<String, Object>) obj)); }
+    @SuppressWarnings("unchecked")
+    public MMPaySDK onTxSuccess(Consumer<Map<String, Object>> cb) { return on("tx:success", obj -> cb.accept((Map<String, Object>) obj)); }
+    @SuppressWarnings("unchecked")
+    public MMPaySDK onTxFail(Consumer<Map<String, Object>> cb) { return on("tx:failed", obj -> cb.accept((Map<String, Object>) obj)); }
+    @SuppressWarnings("unchecked")
+    public MMPaySDK onTxRefund(Consumer<Map<String, Object>> cb) { return on("tx:refunded", obj -> cb.accept((Map<String, Object>) obj)); }
+    @SuppressWarnings("unchecked")
+    public MMPaySDK onTxCancel(Consumer<Map<String, Object>> cb) { return on("tx:cancel", obj -> cb.accept((Map<String, Object>) obj)); }
+    @SuppressWarnings("unchecked")
+    public MMPaySDK onTxExpire(Consumer<Map<String, Object>> cb) { return on("tx:expire", obj -> cb.accept((Map<String, Object>) obj)); }
+    @SuppressWarnings("unchecked")
+    public MMPaySDK onHeartbeat(Consumer<Map<String, Object>> cb) { return on("tx:heartbeat", obj -> cb.accept((Map<String, Object>) obj)); }
+    public MMPaySDK onError(Consumer<Exception> cb) { return on("error", obj -> cb.accept((Exception) obj)); }
 
-        ObjectNode xPayload = mapper.valueToTree(params);
-        xPayload.put("appId", this.appId);
-        xPayload.put("nonce", nonce);
-
-        // 1. Handshake
-        sandboxHandShake(params.orderId, nonce);
-
-        // 2. Pay
-        Map<String, String> headers = new HashMap<>();
-        headers.put("X-Mmpay-Btoken", this.btoken);
-
-        return sendRequest("/payments/sandbox-create", xPayload, headers);
-    }
-
-    public Map<String, Object> sandboxGet(PayGetRequest params) throws Exception {
-        String nonce = getNonce();
-
-        ObjectNode xPayload = mapper.valueToTree(params);
-        xPayload.put("nonce", nonce);
-
-        // 1. Handshake
-        sandboxHandShake(params.orderId, nonce);
-
-        // 2. Get
-        Map<String, String> headers = new HashMap<>();
-        headers.put("X-Mmpay-Btoken", this.btoken);
-
-        return sendRequest("/payments/sandbox-get", xPayload, headers);
-    }
-
-    // --- Production Methods ---
+    // --- Methods ---
 
     public Map<String, Object> handShake(String orderId, String nonce) throws Exception {
         Map<String, String> payload = new HashMap<>();
         payload.put("orderId", orderId);
         payload.put("nonce", nonce);
 
-        Map<String, Object> response = sendRequest("/payments/handshake", payload, null);
+        String segment = this.isSandbox ? "sandbox-handshake" : "handshake";
+        Map<String, Object> response = sendRequest("/payments/" + segment, payload, null);
         
         if (response.containsKey("token")) {
             this.btoken = (String) response.get("token");
@@ -169,7 +167,8 @@ public class MMPaySDK {
         Map<String, String> headers = new HashMap<>();
         headers.put("X-Mmpay-Btoken", this.btoken);
 
-        return sendRequest("/payments/create", xPayload, headers);
+        String segment = this.isSandbox ? "sandbox-create" : "create";
+        return sendRequest("/payments/" + segment, xPayload, headers);
     }
 
     public Map<String, Object> get(PayGetRequest params) throws Exception {
@@ -185,10 +184,28 @@ public class MMPaySDK {
         Map<String, String> headers = new HashMap<>();
         headers.put("X-Mmpay-Btoken", this.btoken);
 
-        return sendRequest("/payments/get", xPayload, headers);
+        String segment = this.isSandbox ? "sandbox-get" : "get";
+        return sendRequest("/payments/" + segment, xPayload, headers);
     }
 
-    // --- Verification ---
+    public Map<String, Object> cancel(PayCancelRequest params) throws Exception {
+        String nonce = getNonce();
+
+        ObjectNode xPayload = mapper.valueToTree(params);
+        xPayload.put("nonce", nonce);
+
+        // 1. Handshake
+        handShake(params.orderId, nonce);
+
+        // 2. Cancel
+        Map<String, String> headers = new HashMap<>();
+        headers.put("X-Mmpay-Btoken", this.btoken);
+
+        String segment = this.isSandbox ? "sandbox-cancel" : "cancel";
+        return sendRequest("/payments/" + segment, xPayload, headers);
+    }
+
+    // --- Verification & Listening ---
 
     public boolean verifyCb(String payload, String nonce, String expectedSignature) {
         try {
@@ -199,5 +216,42 @@ public class MMPaySDK {
             e.printStackTrace();
             return false;
         }
+    }
+
+    public MMPaySDK listen(String payload, String nonce, String expectedSignature) {
+        try {
+            if (!verifyCb(payload, nonce, expectedSignature)) {
+                throw new RuntimeException("Signature verification failed");
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> tx = mapper.readValue(payload, Map.class);
+            String status = (String) tx.get("status");
+            String condition = (String) tx.get("condition");
+
+            if ("PENDING".equals(status)) {
+                emit("tx:create", tx);
+            } else if ("SUCCESS".equals(status)) {
+                if ("TOUCHED".equals(condition)) {
+                    emit("tx:heartbeat", tx);
+                } else {
+                    emit("tx:success", tx);
+                }
+            } else if ("FAILED".equals(status)) {
+                emit("tx:failed", tx);
+            } else if ("REFUNDED".equals(status)) {
+                emit("tx:refunded", tx);
+            } else if ("CANCELLED".equals(status)) {
+                emit("tx:cancel", tx);
+            } else if ("EXPIRED".equals(status)) {
+                emit("tx:expire", tx);
+            } else {
+                emit("tx:unknown", tx);
+            }
+        } catch (Exception e) {
+            emit("error", e);
+        }
+
+        return this;
     }
 }
